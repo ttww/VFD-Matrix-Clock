@@ -20,7 +20,7 @@ const char *password = SECRET_PASSWD;
 
 /*
 
-         ESP           DISPLAY
+          ESP           DISPLAY
 Orange    IO33          FILAMENT_EN     #1     Out, high active
 Gelb      IO36 ADC2     LII_SW          #11    In, LDR to low
 Grün      IO26          RESET           #5     Out. low active
@@ -107,12 +107,13 @@ void setup_VFD() {
   pinMode(PIN_VFD_FILAMENT, OUTPUT);
   pinMode(PIN_VFD_RESET, OUTPUT);
 
-  /*delay(1);
-  digitalWrite(PIN_VFD_RESET, LOW);
-  delay(1);
-  digitalWrite(PIN_VFD_RESET, HIGH);
-  delay(1);
-*/
+  /*
+    delay(1);
+    digitalWrite(PIN_VFD_RESET, LOW);
+    delay(1);
+    digitalWrite(PIN_VFD_RESET, HIGH);
+    delay(1);
+  */
   digitalWrite(PIN_VFD_FILAMENT, HIGH);
 
   digitalWrite(PIN_VFD_LDR, HIGH);
@@ -123,37 +124,48 @@ void setup_VFD() {
   // function
 }
 
-int x;
-int y = 20;
+void drawDigitHorizontalSegment(int x, int y, int w, int wv) {
+  int xp = x + wv;
+  u8g2.drawHLine(x + wv, y + 1, w);
+  u8g2.drawHLine(x + wv + 1, y + 0, w - 2);
+  u8g2.drawHLine(x + wv + 1, y + 2, w - 2);
+}
+
+void drawDigits(int x, int y, const char *digits, int dw, int dwv, int dh,
+                int dhv) {
+
+  if (digits[0]) { // A segment
+    drawDigitHorizontalSegment(x, y, dw, dwv);
+  }
+  if (digits[1]) { // B segment
+  }
+  if (digits[2]) { // C segment
+  }
+  if (digits[3]) { // D segment
+    drawDigitHorizontalSegment(x, y + dh * 2, dw, dwv);
+  }
+  if (digits[4]) { // E segment
+  }
+  if (digits[5]) { // F segment
+  }
+  if (digits[6]) { // G segment
+    drawDigitHorizontalSegment(x, y + dh * 1, dw, dwv);
+  }
+}
 
 void loop_VFD() {
 
   // u8g2.setFont(u8g2_font_ncenB14_tr);
-  u8g2.setFont(u8g2_font_unifont_t_weather);
 
   u8g2.firstPage();
   do {
-    // for (int i=0; i<50; i++) {
-    //    u8g2.drawLine(0, i, 255, i);
-    // }
-    // u8g2.drawPixel(0, 0);
-    // u8g2.drawPixel(255, 0);
-    // u8g2.drawPixel(0, 49);
-    // u8g2.drawPixel(255, 49);
 
-    u8g2.drawLine(0, 0, x, y);
-    u8g2.drawLine(255, 0, x, y);
-    u8g2.drawLine(0, 49, x, y);
-    u8g2.drawLine(255, 49, x, y);
-    x++;
-    if (x >= 256) {
-      x = 0;
-      y++;
-      if (y >= 50)
-        y = 0;
-    }
-    u8g2.setCursor(x, y);
-    u8g2.print("x ☃  Ä Ö Ü ä ö ü ß € x");
+    drawDigits(1, 1, ".......", 20, 4, 20, 3);
+
+    u8g2.setFont(u8g2_font_10x20_me);
+
+    u8g2.setCursor(40, 30);
+    u8g2.print("AaBbCc 123 ÄÖÜ äöü ß€");
   } while (u8g2.nextPage());
 }
 
@@ -170,9 +182,8 @@ void setup() {
 
 int ldr, brightness;
 
-
-Neotimer ldr_timer = Neotimer(150);  // 75ms second timer
-Neotimer sec_timer = Neotimer(1000); // 1s second timer
+Neotimer ldr_timer = Neotimer(150); // 75ms second timer
+Neotimer sec_timer = Neotimer(500);
 
 void loop() {
   loop_OTA();
@@ -180,23 +191,22 @@ void loop() {
   if (ldr_timer.repeat()) {
 
     ldr = analogRead(PIN_VFD_LDR);
-    int raw_brightness = map(ldr, 0, 1500, 130, 1);
+    int raw_brightness = map(ldr, 0, 1500, 40, 1);
     if (raw_brightness < 1)
       raw_brightness = 1;
-
 
     if (brightness > raw_brightness)
       brightness--;
     if (brightness < raw_brightness)
       brightness++;
-    
-    if (brightness != raw_brightness) u8g2.setContrast(brightness);
+
+    if (brightness != raw_brightness)
+      u8g2.setContrast(brightness);
   }
 
-  int sec = millis() / 1000;
   if (sec_timer.repeat()) {
+    int sec = millis() / 1000;
     Serial.printf("Alive...%ld   LDR = %d --> %d\n", sec, ldr, brightness);
     loop_VFD();
   }
-
 }
