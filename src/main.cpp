@@ -42,6 +42,8 @@ u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
      /* dc=*/PIN_VFD_CLOCK,
      /* reset=*/PIN_VFD_RESET /* U8X8_PIN_NONE , PIN_VFD_RESET */);
 
+int ldr, brightness, sec;
+
 void setup_OTA_and_WIFI() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
@@ -124,33 +126,72 @@ void setup_VFD() {
   // function
 }
 
-void drawDigitHorizontalSegment(int x, int y, int w, int wv) {
-  int xp = x + wv;
-  u8g2.drawHLine(x + wv, y + 1, w);
-  u8g2.drawHLine(x + wv + 1, y + 0, w - 2);
-  u8g2.drawHLine(x + wv + 1, y + 2, w - 2);
+void drawHorizontalSegment(int x, int y, int w) {
+  u8g2.drawHLine(x, y, w);
+  if (w > 5) {
+    u8g2.drawHLine(x + 1, y - 1, w - 2);
+    u8g2.drawHLine(x + 1, y + 1, w - 2);
+  }
+}
+void drawVerticalSegment(int x, int y, int h) {
+  u8g2.drawVLine(x, y, h);
+  if (h > 5) {
+    u8g2.drawVLine(x - 1, y + 1, h - 2);
+    u8g2.drawVLine(x + 1, y + 1, h - 2);
+  }
 }
 
-void drawDigits(int x, int y, const char *digits, int dw, int dwv, int dh,
-                int dhv) {
+void drawSegments(int x, int y, const char *digits, int dw, int dwv, int dh,
+                  int dhv) {
 
-  if (digits[0]) { // A segment
-    drawDigitHorizontalSegment(x, y, dw, dwv);
+  // u8g2.drawFrame(x,y, dw + 2 * dwv, 2 * dh + 2 * dhv);
+  x += dwv + 1;
+  y += 1;
+
+  if (digits[0] != ' ') { // A segment
+    drawHorizontalSegment(x, y, dw);
   }
-  if (digits[1]) { // B segment
+  if (digits[1] != ' ') { // B segment
+    drawVerticalSegment(x + dw + dwv - 1, y + dhv, dh);
   }
-  if (digits[2]) { // C segment
+  if (digits[2] != ' ') { // C segment
+    drawVerticalSegment(x + dw + dwv - 1, y + dh + dhv + dhv + dhv - 1, dh);
   }
-  if (digits[3]) { // D segment
-    drawDigitHorizontalSegment(x, y + dh * 2, dw, dwv);
+  if (digits[3] != ' ') { // D segment
+    drawHorizontalSegment(x, y + dh + dh + dhv + dhv + dhv + dhv - 2, dw);
   }
-  if (digits[4]) { // E segment
+  if (digits[4] != ' ') { // E segment
+    drawVerticalSegment(x - dwv, y + dh + dhv + dhv + dhv - 1, dh);
   }
-  if (digits[5]) { // F segment
+  if (digits[5] != ' ') { // F segment
+    drawVerticalSegment(x - dwv, y + dhv, dh);
   }
-  if (digits[6]) { // G segment
-    drawDigitHorizontalSegment(x, y + dh * 1, dw, dwv);
+  if (digits[6] != ' ') { // G segment
+    drawHorizontalSegment(x, y + dh + dhv + dhv - 1, dw);
   }
+}
+
+void drawDigit(int x, int y, int digit, int dw, int dwv, int dh, int dhv) {
+  const char *digits[] = {
+      "...... ", // 0
+      " ..    ", // 1
+      ".. .. .", // 2
+      "....  .", // xxx
+      " ..  ..", // xxx
+      ". .. ..", // xxx
+      ". .....", // xxx
+      "...    ", // xxx
+      ".......", // xxx
+      "...  ..", // xxx
+  };
+
+  const char *segments;
+  if (digit >= 0 && digit <= 9)
+    segments = digits[digit];
+  else
+    segments = ".  .  .";
+
+  drawSegments(x, y, segments, dw, dwv, dh, dhv);
 }
 
 void loop_VFD() {
@@ -160,12 +201,22 @@ void loop_VFD() {
   u8g2.firstPage();
   do {
 
-    drawDigits(1, 1, ".......", 20, 4, 20, 3);
+    drawDigit(1, 1, sec % 11, 3, 0, 5, 0);
+    drawDigit(10, 1, sec % 11, 3, 1, 5, 1);
+    drawDigit(20, 1, sec % 11, 10, 2, 12, 2);
+    drawDigit(40, 1, sec % 11, 10, 1, 12, 1);
+
+    if (sec % 2 == 0) {
+      u8g2.drawPixel(1, 1);
+      u8g2.drawPixel(10, 1);
+      u8g2.drawPixel(20, 1);
+      u8g2.drawPixel(40, 1);
+    }
 
     u8g2.setFont(u8g2_font_10x20_me);
 
-    u8g2.setCursor(40, 30);
-    u8g2.print("AaBbCc 123 ÄÖÜ äöü ß€");
+    u8g2.setCursor(60, 30);
+    u8g2.print("Abc 123 ÄÖÜ äöü");
   } while (u8g2.nextPage());
 }
 
@@ -179,8 +230,6 @@ void setup() {
 
   setup_VFD();
 }
-
-int ldr, brightness;
 
 Neotimer ldr_timer = Neotimer(150); // 75ms second timer
 Neotimer sec_timer = Neotimer(500);
@@ -204,8 +253,9 @@ void loop() {
       u8g2.setContrast(brightness);
   }
 
+  sec = millis() / 1000;
+
   if (sec_timer.repeat()) {
-    int sec = millis() / 1000;
     Serial.printf("Alive...%ld   LDR = %d --> %d\n", sec, ldr, brightness);
     loop_VFD();
   }
