@@ -5,3 +5,5 @@
 .vscode/ipch
 arduino_secrets.h
 VFD-Matrix (Autosaved).piko
+cppcheck-addon-ctu-file-list
+main.cpp.ctu-info

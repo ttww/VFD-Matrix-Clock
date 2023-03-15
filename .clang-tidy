@@ -1,0 +1,18 @@
+Checks:
+  -*,
+  bugprone-*,
+  google-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  portability-*,
+  readability-*,
+  -google-readability-braces-around-statements
+  -misc-non-private-member-variables-in-classes,
+  -readability-named-parameter,
+  -readability-braces-around-statements,
+  -readability-magic-numbers
+  -llvmlibc-callee-namespace
+  -readability-identifier-length
+  -bugprone-easily-swappable-parameters
+  -modernize-avoid-c-arrays
