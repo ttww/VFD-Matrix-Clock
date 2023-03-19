@@ -2,10 +2,11 @@
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <U8g2lib.h>
-#include <NTPClient.h>
+#include <NTP.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <neotimer.h>
+#include <MQTT.h>
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -18,9 +19,14 @@
 
 const char *ssid = SECRET_SSID;
 const char *password = SECRET_PASSWD;
+const char *mqtt_host = MQTT_HOST;
+
+const char *hostname = "matrix-vfd";
+
+String mqtt_topic = "clock/matrix-vfd";
+String mqtt_log_topic = "log/matrix-vfd/debug";
 
 /*
-
           ESP           DISPLAY
 Orange    IO33          FILAMENT_EN     #1     Out, high active
 Gelb      IO36 ADC2     LII_SW          #11    In, LDR to low
@@ -39,6 +45,12 @@ const byte PIN_VFD_DATA = 32;
 const byte PIN_VFD_CHIPSELECT = 5;
 
 //-----------------------------------------------------------------------------
+// MQTT declarations:
+//-----------------------------------------------------------------------------
+WiFiClient net;
+MQTTClient mqtt;
+
+//-----------------------------------------------------------------------------
 // VFD-Display declarations:
 //-----------------------------------------------------------------------------
 U8G2_GP1287AI_256X50_1_4W_HW_SPI
@@ -50,12 +62,32 @@ u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
 // NTP declarations:
 //-----------------------------------------------------------------------------
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP);
+NTP ntp(ntpUDP);
 
 //-----------------------------------------------------------------------------
 // Clock declarations:
 //-----------------------------------------------------------------------------
 int ldr, brightness, sec;
+
+//-----------------------------------------------------------------------------
+// Utils code:
+//-----------------------------------------------------------------------------
+
+void mqtt_log(const char *message);
+void mqtt_log(String message);
+
+void log(const char *format, ...)
+{
+	va_list arg;
+	va_start(arg, format);
+
+	char buf[100];
+	vsnprintf(buf, sizeof(buf) - 1, format, arg);
+	buf[sizeof(buf) - 1] = '\0';
+	va_end(arg);
+
+	mqtt_log(buf);
+}
 
 //-----------------------------------------------------------------------------
 // OTA / WIFI code:
@@ -75,7 +107,7 @@ static void setup_OTA_and_WIFI()
 	// ArduinoOTA.setPort(3232);
 
 	// Hostname defaults to esp3232-[MAC]
-	ArduinoOTA.setHostname("matrix-vfd");
+	ArduinoOTA.setHostname(hostname);
 
 	// No authentication by default
 	// ArduinoOTA.setPassword("admin");
@@ -130,12 +162,82 @@ void loop_OTA()
 
 void setup_NTP()
 {
-  timeClient.begin();
+	ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
+	ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
+	ntp.begin();
 }
 
 void loop_NTP()
 {
-  timeClient.update();
+	ntp.update();
+}
+
+//-----------------------------------------------------------------------------
+// MQTT code:
+//-----------------------------------------------------------------------------
+
+void messageReceived(String &topic, String &payload)
+{
+	Serial.println("incoming: " + topic + " - " + payload);
+}
+
+void mqtt_publish(const char *topic, const char *message)
+{
+	if (mqtt.connected() == false)
+		Serial.printf("MQTT: %s: %s\n", topic, message);
+	else
+		mqtt.publish(mqtt_topic + String(topic), message);
+}
+void mqtt_log(const char *message)
+{
+	Serial.printf("LOG: %s\n", message);
+	if (mqtt.connected())
+		mqtt.publish(mqtt_log_topic, message);
+}
+void mqtt_log(String message)
+{
+	mqtt_log(message.c_str());
+}
+
+void mqtt_subscribe()
+{
+	log("started...");
+}
+void mqtt_last_will()
+{
+	mqtt.setWill("/status/alive", "false");
+}
+
+bool mqtt_validate()
+{
+	if (mqtt.connected())
+		return true;
+
+	Serial.printf("MQTT: Try connect to %s...\n", mqtt_host);
+	mqtt.connect(hostname);
+	delay(100);
+
+	if (mqtt.connected()) {
+		Serial.printf("MQTT: connect done.\n");
+		mqtt_last_will();
+		mqtt_subscribe();
+	}
+	return mqtt.connected();
+}
+
+void setup_MQTT()
+{
+	mqtt.begin(mqtt_host, net);
+	mqtt.onMessage(messageReceived);
+
+	mqtt_validate();
+}
+
+void loop_MQTT()
+{
+	if (mqtt_validate()) {
+		mqtt.loop();
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -164,7 +266,7 @@ void setup_VFD()
 	// function
 }
 
-void drawHorizontalSegment(int x, int y, int w)
+void draw_horizontal_segment(int x, int y, int w)
 {
 	u8g2.drawHLine(x, y, w);
 	if (w > 5) {
@@ -173,7 +275,7 @@ void drawHorizontalSegment(int x, int y, int w)
 	}
 }
 
-void drawVerticalSegment(int x, int y, int h)
+void draw_vertical_segment(int x, int y, int h)
 {
 	u8g2.drawVLine(x, y, h);
 	if (h > 5) {
@@ -182,36 +284,36 @@ void drawVerticalSegment(int x, int y, int h)
 	}
 }
 
-void drawSegments(int x, int y, const char *digits, int dw, int dwv, int dh, int dhv)
+void draw_segments(int x, int y, const char *digits, int dw, int dwv, int dh, int dhv)
 {
 	// u8g2.drawFrame(x,y, dw + 2 * dwv, 2 * dh + 2 * dhv);
 	x += dwv + 1;
 	y += 1;
 
 	if (digits[0] != ' ') { // A segment
-		drawHorizontalSegment(x, y, dw);
+		draw_horizontal_segment(x, y, dw);
 	}
 	if (digits[1] != ' ') { // B segment
-		drawVerticalSegment(x + dw + dwv - 1, y + dhv, dh);
+		draw_vertical_segment(x + dw + dwv - 1, y + dhv, dh);
 	}
 	if (digits[2] != ' ') { // C segment
-		drawVerticalSegment(x + dw + dwv - 1, y + dh + dhv + dhv + dhv - 1, dh);
+		draw_vertical_segment(x + dw + dwv - 1, y + dh + dhv + dhv + dhv - 1, dh);
 	}
 	if (digits[3] != ' ') { // D segment
-		drawHorizontalSegment(x, y + dh + dh + dhv + dhv + dhv + dhv - 2, dw);
+		draw_horizontal_segment(x, y + dh + dh + dhv + dhv + dhv + dhv - 2, dw);
 	}
 	if (digits[4] != ' ') { // E segment
-		drawVerticalSegment(x - dwv, y + dh + dhv + dhv + dhv - 1, dh);
+		draw_vertical_segment(x - dwv, y + dh + dhv + dhv + dhv - 1, dh);
 	}
 	if (digits[5] != ' ') { // F segment
-		drawVerticalSegment(x - dwv, y + dhv, dh);
+		draw_vertical_segment(x - dwv, y + dhv, dh);
 	}
 	if (digits[6] != ' ') { // G segment
-		drawHorizontalSegment(x, y + dh + dhv + dhv - 1, dw);
+		draw_horizontal_segment(x, y + dh + dhv + dhv - 1, dw);
 	}
 }
 
-void drawDigit(int x, int y, int digit, int dw, int dwv, int dh, int dhv)
+void draw_digit(int x, int y, int digit, int dw, int dwv, int dh, int dhv)
 {
 	const char *digits[] = {
 		"...... ", // 0
@@ -232,7 +334,13 @@ void drawDigit(int x, int y, int digit, int dw, int dwv, int dh, int dhv)
 	else
 		segments = ".  .  .";
 
-	drawSegments(x, y, segments, dw, dwv, dh, dhv);
+	draw_segments(x, y, segments, dw, dwv, dh, dhv);
+}
+
+void draw_2_numbers(int x, int y, int value, int dw, int dwv, int dh, int dhv)
+{
+	draw_digit(x, y, value / 10, dw, dwv, dh, dhv);
+	draw_digit(x + dw + 4 * dwv + 2, y, value % 10, dw, dwv, dh, dhv);
 }
 
 Neotimer ldr_timer = Neotimer(150); // 75ms second timer
@@ -247,11 +355,13 @@ void adjust_vfd_brightness()
 
 		if (brightness > raw_brightness)
 			brightness--;
-		if (brightness < raw_brightness)
+		else if (brightness < raw_brightness)
 			brightness++;
 
-		if (brightness != raw_brightness)
+		if (brightness != raw_brightness) {
+			log("brightness = %d", brightness);
 			u8g2.setContrast(brightness);
+		}
 	}
 }
 
@@ -260,31 +370,51 @@ void loop_VFD()
 	adjust_vfd_brightness();
 }
 
+void draw_current_time(int x, int y)
+{
+	int dw = 14;
+	int dwv = 1;
+	int dh = 12;
+	int dhv = 1;
+
+	int xv = dw * 3 + 4 * dwv + dw / 2 + 2;
+
+	draw_2_numbers(x, y, ntp.hours() , dw, dwv, dh, dhv);
+	x += xv;
+	draw_2_numbers(x, y, ntp.minutes() , dw, dwv, dh, dhv);
+	x += xv;
+	draw_2_numbers(x, y, ntp.seconds() , dw, dwv, dh, dhv);
+}
+
 void loop_VFD_1sec()
 {
 	// u8g2.setFont(u8g2_font_ncenB14_tr);
-
+	int loops = 0;
 	u8g2.firstPage();
 	do {
-		drawDigit(1, 1, sec % 11, 3, 0, 5, 0);
-		drawDigit(10, 1, sec % 11, 3, 1, 5, 1);
-		drawDigit(20, 1, sec % 11, 10, 2, 12, 2);
-		drawDigit(40, 1, sec % 11, 10, 1, 12, 1);
+		loops++;
 
-		if (sec % 2 == 0) {
-			u8g2.drawPixel(1, 1);
-			u8g2.drawPixel(10, 1);
-			u8g2.drawPixel(20, 1);
-			u8g2.drawPixel(40, 1);
-		}
+		draw_current_time(0, 0);
 
-		u8g2.setFont(u8g2_font_10x20_me);
+		// draw_digit(1, 1, sec % 11, 3, 0, 5, 0);
+		// draw_digit(10, 1, sec % 11, 3, 1, 5, 1);
+		// draw_digit(20, 1, sec % 11, 10, 2, 12, 2);
+		// draw_digit(40, 1, sec % 11, 14, 1, 12, 1);
+
+		// if (sec % 2 == 0) {
+		// 	u8g2.drawPixel(1, 1);
+		// 	u8g2.drawPixel(10, 1);
+		// 	u8g2.drawPixel(20, 1);
+		// 	u8g2.drawPixel(40, 1);
+		// }
+
+		// u8g2.setFont(u8g2_font_10x20_me);
 
 		//u8g2.setCursor(60, 30);
 		//u8g2.print("Abc 123 ÄÖÜ äöü");
 	} while (u8g2.nextPage());
 
-  //Serial.printf("Time= %s\n", timeClient.getFormattedTime());
+	log("Loops %d, Time= %s\n", loops, ntp.formattedTime("%A %C %F %H"));
 }
 
 //-----------------------------------------------------------------------------
@@ -298,22 +428,31 @@ void setup()
 	Serial.printf("\n\nRunning....\n");
 
 	setup_OTA_and_WIFI();
-	setup_NTP();
 	setup_VFD();
+	setup_NTP();
+	setup_MQTT();
 }
 
-Neotimer sec_timer = Neotimer(500);
+//Neotimer sec_timer = Neotimer(500);
+Neotimer alive_timer = Neotimer(1000 * 60 * 10);
+
+int last_sec = -1;
 
 void loop()
 {
 	loop_OTA();
 	loop_NTP();
+	loop_MQTT();
 	loop_VFD();
 
 	sec = millis() / 1000;
 
-	if (sec_timer.repeat()) {
-		Serial.printf("Alive...%ld   LDR = %d --> %d\n", sec, ldr, brightness);
+	if (sec != last_sec) {
+		last_sec = sec;
 		loop_VFD_1sec();
+	}
+
+	if (alive_timer.repeat()) {
+		mqtt_publish("/status/alive", "true");
 	}
 }
