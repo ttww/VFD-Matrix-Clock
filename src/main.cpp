@@ -45,10 +45,22 @@ const byte PIN_VFD_DATA = 32;
 const byte PIN_VFD_CHIPSELECT = 5;
 
 //-----------------------------------------------------------------------------
+// WIFI declarations:
+//-----------------------------------------------------------------------------
+bool wifi_connected = false;
+
+void setup_after_WIFI_connect();
+
+//-----------------------------------------------------------------------------
 // MQTT declarations:
 //-----------------------------------------------------------------------------
 WiFiClient net;
 MQTTClient mqtt;
+
+void setup_MQTT();
+
+void mqtt_log(const char *message);
+void mqtt_log(String message);
 
 //-----------------------------------------------------------------------------
 // VFD-Display declarations:
@@ -63,6 +75,7 @@ u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
 //-----------------------------------------------------------------------------
 WiFiUDP ntpUDP;
 NTP ntp(ntpUDP);
+void setup_NTP();
 
 //-----------------------------------------------------------------------------
 // Clock declarations:
@@ -72,9 +85,6 @@ int ldr, brightness, sec;
 //-----------------------------------------------------------------------------
 // Utils code:
 //-----------------------------------------------------------------------------
-
-void mqtt_log(const char *message);
-void mqtt_log(String message);
 
 void log(const char *format, ...)
 {
@@ -93,16 +103,8 @@ void log(const char *format, ...)
 // OTA / WIFI code:
 //-----------------------------------------------------------------------------
 
-static void setup_OTA_and_WIFI()
+void setup_OTA()
 {
-	WiFi.mode(WIFI_STA);
-	WiFi.begin(ssid, password);
-	while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-		Serial.println("Connection Failed! Rebooting...");
-		delay(5000);
-		ESP.restart();
-	}
-
 	// Port defaults to 3232
 	// ArduinoOTA.setPort(3232);
 
@@ -145,10 +147,32 @@ static void setup_OTA_and_WIFI()
 		});
 
 	ArduinoOTA.begin();
+}
 
-	Serial.println("Ready");
-	Serial.print("IP address: ");
-	Serial.println(WiFi.localIP());
+void setup_WIFI()
+{
+	log("Try to setup WIFI");
+	WiFi.mode(WIFI_STA);
+	log("Try to connect to SSID %s", ssid);
+
+	WiFi.begin(ssid, password);
+}
+
+void loop_WIFI()
+{
+	if (wifi_connected == false && WiFi.status() == WL_CONNECTED) {
+		wifi_connected = true;
+		log("Wifi %s connected.", ssid);
+		log("IP address: %s", WiFi.localIP().toString().c_str());
+
+		setup_after_WIFI_connect();
+	}
+
+	if (wifi_connected == true && WiFi.status() != WL_CONNECTED) {
+		log("Lost wifi, reboot...");
+		delay(1000);
+		ESP.restart();
+	}
 }
 
 void loop_OTA()
@@ -156,8 +180,15 @@ void loop_OTA()
 	ArduinoOTA.handle();
 }
 
+void setup_after_WIFI_connect()
+{
+	setup_OTA();
+	setup_NTP();
+	setup_MQTT();
+}
+
 //-----------------------------------------------------------------------------
-// OTA / WIFI code:
+// NTP code:
 //-----------------------------------------------------------------------------
 
 void setup_NTP()
@@ -188,12 +219,14 @@ void mqtt_publish(const char *topic, const char *message)
 	else
 		mqtt.publish(mqtt_topic + String(topic), message);
 }
+
 void mqtt_log(const char *message)
 {
 	Serial.printf("LOG: %s\n", message);
 	if (mqtt.connected())
 		mqtt.publish(mqtt_log_topic, message);
 }
+
 void mqtt_log(String message)
 {
 	mqtt_log(message.c_str());
@@ -203,6 +236,7 @@ void mqtt_subscribe()
 {
 	log("started...");
 }
+
 void mqtt_last_will()
 {
 	mqtt.setWill("/status/alive", "false");
@@ -213,12 +247,12 @@ bool mqtt_validate()
 	if (mqtt.connected())
 		return true;
 
-	Serial.printf("MQTT: Try connect to %s...\n", mqtt_host);
+	log("MQTT: Try connect to %s...", mqtt_host);
 	mqtt.connect(hostname);
 	delay(100);
 
 	if (mqtt.connected()) {
-		Serial.printf("MQTT: connect done.\n");
+		log("MQTT: connect done.");
 		mqtt_last_will();
 		mqtt_subscribe();
 	}
@@ -379,11 +413,11 @@ void draw_current_time(int x, int y)
 
 	int xv = dw * 3 + 4 * dwv + dw / 2 + 2;
 
-	draw_2_numbers(x, y, ntp.hours() , dw, dwv, dh, dhv);
+	draw_2_numbers(x, y, ntp.hours(), dw, dwv, dh, dhv);
 	x += xv;
-	draw_2_numbers(x, y, ntp.minutes() , dw, dwv, dh, dhv);
+	draw_2_numbers(x, y, ntp.minutes(), dw, dwv, dh, dhv);
 	x += xv;
-	draw_2_numbers(x, y, ntp.seconds() , dw, dwv, dh, dhv);
+	draw_2_numbers(x, y, ntp.seconds(), dw, dwv, dh, dhv);
 }
 
 void loop_VFD_1sec()
@@ -414,7 +448,7 @@ void loop_VFD_1sec()
 		//u8g2.print("Abc 123 ÄÖÜ äöü");
 	} while (u8g2.nextPage());
 
-	log("Loops %d, Time= %s\n", loops, ntp.formattedTime("%A %C %F %H"));
+	log("Loops %d, Time= %s", loops, ntp.formattedTime("%A %C %F %H"));
 }
 
 //-----------------------------------------------------------------------------
@@ -424,13 +458,11 @@ void loop_VFD_1sec()
 void setup()
 {
 	Serial.begin(115200);
-
+    delay(20);
 	Serial.printf("\n\nRunning....\n");
 
-	setup_OTA_and_WIFI();
+	setup_WIFI();
 	setup_VFD();
-	setup_NTP();
-	setup_MQTT();
 }
 
 //Neotimer sec_timer = Neotimer(500);
@@ -440,9 +472,13 @@ int last_sec = -1;
 
 void loop()
 {
-	loop_OTA();
-	loop_NTP();
-	loop_MQTT();
+	loop_WIFI();
+
+	if (wifi_connected) {
+		loop_OTA();
+		loop_NTP();
+		loop_MQTT();
+	}
 	loop_VFD();
 
 	sec = millis() / 1000;
