@@ -1,12 +1,14 @@
+#include "time.h"
+
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ESPmDNS.h>
 #include <U8g2lib.h>
-#include <NTP.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <neotimer.h>
 #include <MQTT.h>
+#include <HTTPClient.h>
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -71,11 +73,21 @@ u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
      /* reset=*/PIN_VFD_RESET /* U8X8_PIN_NONE , PIN_VFD_RESET */);
 
 //-----------------------------------------------------------------------------
-// NTP declarations:
+// HTTP declarations:
 //-----------------------------------------------------------------------------
-WiFiUDP ntpUDP;
-NTP ntp(ntpUDP);
+
+//-----------------------------------------------------------------------------
+// NTP declarations:
+// (we are using the ESP internal NTP implementation...)
+//-----------------------------------------------------------------------------
 void setup_NTP();
+String timezone = "UTC0";
+
+// Timezone TZ string, eg. "CET-1CEST,M3.5.0,M10.5.0/3" for "Europe/Berlin".
+// Setup via CSV lookup.
+String timezone_definition;
+
+struct tm timeinfo; // Updated in loop
 
 //-----------------------------------------------------------------------------
 // Clock declarations:
@@ -97,6 +109,32 @@ void log(const char *format, ...)
 	va_end(arg);
 
 	mqtt_log(buf);
+}
+
+String http_get_request(String requestUrl)
+{
+	HTTPClient http;
+
+	log("HTTP Request: %s", requestUrl.c_str());
+
+	// Your Domain name with URL path or IP address with path.
+	// Host/IP must have a / before a query parameter!
+	http.begin(requestUrl);
+	//http.setAuthorization("REPLACE_WITH_SERVER_USERNAME", "REPLACE_WITH_SERVER_PASSWORD");
+
+	int httpResponseCode = http.GET();
+
+	String payload = "";
+
+	log("HTTP Response code: %d", httpResponseCode);
+
+	if (httpResponseCode > 0) {
+		payload = http.getString();
+		//log("HTTP Payload      : %s", payload.c_str());
+	}
+	http.end();
+
+	return payload;
 }
 
 //-----------------------------------------------------------------------------
@@ -163,7 +201,9 @@ void loop_WIFI()
 	if (wifi_connected == false && WiFi.status() == WL_CONNECTED) {
 		wifi_connected = true;
 		log("Wifi %s connected.", ssid);
-		log("IP address: %s", WiFi.localIP().toString().c_str());
+		log("IP address  : %s", WiFi.localIP().toString().c_str());
+		if (WiFi.dnsIP())
+			log("DNS resolver: %s", WiFi.dnsIP().toString().c_str());
 
 		setup_after_WIFI_connect();
 	}
@@ -183,24 +223,136 @@ void loop_OTA()
 void setup_after_WIFI_connect()
 {
 	setup_OTA();
-	setup_NTP();
 	setup_MQTT();
+	setup_NTP();
 }
 
 //-----------------------------------------------------------------------------
 // NTP code:
 //-----------------------------------------------------------------------------
 
+// from https://randomnerdtutorials.com/esp32-ntp-timezones-daylight-saving/, adapted
+void setTimezone(String timezone)
+{
+	log("  Setting Timezone to %s\n", timezone.c_str());
+	setenv("TZ", timezone.c_str(), 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+	tzset();
+}
+
+// void setTime(int yr, int month, int mday, int hr, int minute, int sec, int isDst)
+// {
+// 	struct tm tm;
+
+// 	tm.tm_year = yr - 1900; // Set date
+// 	tm.tm_mon = month - 1;
+// 	tm.tm_mday = mday;
+// 	tm.tm_hour = hr; // Set time
+// 	tm.tm_min = minute;
+// 	tm.tm_sec = sec;
+// 	tm.tm_isdst = isDst; // 1 or 0
+// 	time_t t = mktime(&tm);
+
+// 	log("Setting time: %s", asctime(&tm));
+// 	struct timeval now = { .tv_sec = t };
+// 	settimeofday(&now, NULL);
+// }
+
+void initTime(String timezone)
+{
+	log("Setting up time");
+	configTime(0, 0, "pool.ntp.org"); // First connect to NTP server, with 0 TZ offset
+	if (!getLocalTime(&timeinfo)) {
+		log("  Failed to obtain time");
+		return;
+	}
+	log("  Got the time from NTP");
+	setTimezone(timezone);
+}
+
+// void printLocalTime()
+// {
+// 	struct tm timeinfo;
+// 	if (!getLocalTime(&timeinfo)) {
+// 		log("Failed to obtain time 1");
+// 		return;
+// 	}
+// 	Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S zone %Z %z ");
+// }
+
+String get_timezone_definition(String timezone)
+{
+	const char *timezone_url = "https://raw.githubusercontent.com/nayarsystems/posix_tz_db/master/zones.csv";
+
+	String csv_content = http_get_request(timezone_url);
+
+	// Content of file is:
+	//	"Africa/Abidjan","GMT0"
+	//	"Africa/Accra","GMT0"
+	//	"Africa/Addis_Ababa","EAT-3"
+	// ...
+	String search_pattern = "\"" + timezone + "\",\"";
+	int idx = csv_content.indexOf(search_pattern);
+	if (idx != -1) {
+		idx += search_pattern.length();
+		int idx_end = csv_content.indexOf("\"", idx);
+		if (idx_end != -1) {
+			return csv_content.substring(idx, idx_end);
+		}
+	}
+
+	return "UTC0";
+}
+
+// Automatic timezone selection:
+// We are doing a geo location of our router address.
+// 1. Get the external router address.
+// 2. We lookup the timezone of this IP.
+// 3. We lookup the timezone in an timezones.csv for the exact TZ definition (DST etc...)
+void setup_timezone()
+{
+	// Get outside IP for geo location:
+	const char *resolveExternalIpUrl = "http://api.ipify.org/?format=text";
+	const char *resolveTimezoneViaUrl = "https://timeapi.io/api/TimeZone/ip?ipAddress=";
+
+	log("Get external IP");
+	String external_ip = http_get_request(resolveExternalIpUrl);
+	if (external_ip != "") {
+		log("External IP is %s", external_ip.c_str());
+
+		String timezone_json = http_get_request(resolveTimezoneViaUrl + external_ip);
+
+		// Direct lookup, don't use full blown json lib for this...:
+		const char *search_pattern = "\"timeZone\":\"";
+		int idx = timezone_json.indexOf(search_pattern);
+		if (idx != -1) {
+			idx += strlen(search_pattern);
+			int idx_end = timezone_json.indexOf("\"", idx);
+			if (idx_end != -1) {
+				timezone = timezone_json.substring(idx, idx_end);
+				timezone_definition = get_timezone_definition(timezone);
+				log("timezone is            %s", timezone.c_str());
+				log("timezone_definition is %s", timezone_definition.c_str());
+				//printLocalTime();
+				setTimezone(timezone_definition);
+				getLocalTime(&timeinfo);
+				//printLocalTime();
+			}
+		}
+	}
+}
+
 void setup_NTP()
 {
-	ntp.ruleDST("CEST", Last, Sun, Mar, 2, 120); // last sunday in march 2:00, timetone +120min (+1 GMT + 1h summertime offset)
-	ntp.ruleSTD("CET", Last, Sun, Oct, 3, 60); // last sunday in october 3:00, timezone +60min (+1 GMT)
-	ntp.begin();
+	initTime(timezone);
+
+	setup_timezone();
 }
 
 void loop_NTP()
 {
-	ntp.update();
+	// NTP is running in the background, started by configTime() in initTime()
+	getLocalTime(&timeinfo);
+	//ntp.update();
 }
 
 //-----------------------------------------------------------------------------
@@ -220,11 +372,21 @@ void mqtt_publish(const char *topic, const char *message)
 		mqtt.publish(mqtt_topic + String(topic), message);
 }
 
+long lastLogMs = 0;
+
 void mqtt_log(const char *message)
 {
-	Serial.printf("LOG: %s\n", message);
+	char full[20 + 100];
+
+	long usedMs = millis() - lastLogMs;
+
+	snprintf(full, sizeof(full), "+%2d.%03d: %s", (int)(usedMs / 1000), (int)(usedMs % 1000), message);
+	lastLogMs = millis();
+	full[sizeof(full) - 1] = '\0';
+
+	Serial.printf("LOG: %s\n", full);
 	if (mqtt.connected())
-		mqtt.publish(mqtt_log_topic, message);
+		mqtt.publish(mqtt_log_topic, full);
 }
 
 void mqtt_log(String message)
@@ -247,9 +409,14 @@ bool mqtt_validate()
 	if (mqtt.connected())
 		return true;
 
-	log("MQTT: Try connect to %s...", mqtt_host);
+	log("MQTT: Not connected, try connect to %s...", mqtt_host);
 	mqtt.connect(hostname);
-	delay(100);
+
+	// Try connect for 200ms:
+	int tries = 0;
+	while (!mqtt.connected() && tries++ < 200) {
+		delay(1);
+	}
 
 	if (mqtt.connected()) {
 		log("MQTT: connect done.");
@@ -283,21 +450,16 @@ void setup_VFD()
 	pinMode(PIN_VFD_FILAMENT, OUTPUT);
 	pinMode(PIN_VFD_RESET, OUTPUT);
 
-	/*
-    delay(1);
-    digitalWrite(PIN_VFD_RESET, LOW);
-    delay(1);
-    digitalWrite(PIN_VFD_RESET, HIGH);
-    delay(1);
-  */
 	digitalWrite(PIN_VFD_FILAMENT, HIGH);
 
 	digitalWrite(PIN_VFD_LDR, HIGH);
 	pinMode(PIN_VFD_LDR, INPUT_PULLUP);
 
 	u8g2.begin();
-	u8g2.enableUTF8Print(); // enable UTF8 support for the Arduino print()
-	// function
+
+	u8g2.setDisplayRotation(U8G2_R0);
+
+	u8g2.enableUTF8Print(); // enable UTF8 support for the Arduino print() function
 }
 
 void draw_horizontal_segment(int x, int y, int w)
@@ -393,7 +555,7 @@ void adjust_vfd_brightness()
 			brightness++;
 
 		if (brightness != raw_brightness) {
-			log("brightness = %d", brightness);
+			//log("brightness = %d", brightness);
 			u8g2.setContrast(brightness);
 		}
 	}
@@ -411,13 +573,25 @@ void draw_current_time(int x, int y)
 	int dh = 12;
 	int dhv = 1;
 
-	int xv = dw * 3 + 4 * dwv + dw / 2 + 2;
+	// ToDo: Cleanups....
 
-	draw_2_numbers(x, y, ntp.hours(), dw, dwv, dh, dhv);
+	int xv = (int)(dw * 2.5 + 4 * dwv + dw / 2);
+	int xvp = (int)xv - (dw * 0.30);
+
+	int yv = (int)(dh * 2 + 4 * dhv);
+	int dpy = (int)(yv * 0.2);
+
+	draw_2_numbers(x, y, timeinfo.tm_hour, dw, dwv, dh, dhv);
+	u8g2.drawBox(x + xvp, y + yv / 2 - dpy, 2, 2);
+	u8g2.drawBox(x + xvp, y + yv / 2 + dpy, 2, 2);
 	x += xv;
-	draw_2_numbers(x, y, ntp.minutes(), dw, dwv, dh, dhv);
+
+	draw_2_numbers(x, y, timeinfo.tm_min, dw, dwv, dh, dhv);
+	u8g2.drawBox(x + xvp, y + yv / 2 - dpy, 2, 2);
+	u8g2.drawBox(x + xvp, y + yv / 2 + dpy, 2, 2);
 	x += xv;
-	draw_2_numbers(x, y, ntp.seconds(), dw, dwv, dh, dhv);
+
+	draw_2_numbers(x, y, timeinfo.tm_sec, dw, dwv, dh, dhv);
 }
 
 void loop_VFD_1sec()
@@ -442,13 +616,19 @@ void loop_VFD_1sec()
 		// 	u8g2.drawPixel(40, 1);
 		// }
 
-		// u8g2.setFont(u8g2_font_10x20_me);
+		//		u8g2.setFont(u8g2_font_10x20_me);
+		u8g2.setFont(u8g2_font_6x10_tf);
 
-		//u8g2.setCursor(60, 30);
-		//u8g2.print("Abc 123 ÄÖÜ äöü");
+		u8g2.setCursor(0, 48);
+		u8g2.printf("Free Memory = %ld  ", ESP.getFreeHeap());
+
+		u8g2.setFont(u8g2_font_5x8_tf);
+		u8g2.setCursor(154, 10);
+		u8g2.printf("%s        ", timezone.c_str());
+
 	} while (u8g2.nextPage());
 
-	log("Loops %d, Time= %s", loops, ntp.formattedTime("%A %C %F %H"));
+	//log("Loops %d, Time= %s", loops, ntp.formattedTime("%A %C %F %H"));
 }
 
 //-----------------------------------------------------------------------------
@@ -458,8 +638,10 @@ void loop_VFD_1sec()
 void setup()
 {
 	Serial.begin(115200);
-    delay(20);
-	Serial.printf("\n\nRunning....\n");
+	delay(50);
+	Serial.printf("\n\n");
+	Serial.printf("Running....\n");
+	Serial.printf("---------------------------------------------------------\n");
 
 	setup_WIFI();
 	setup_VFD();
@@ -476,16 +658,24 @@ void loop()
 
 	if (wifi_connected) {
 		loop_OTA();
-		loop_NTP();
 		loop_MQTT();
+		loop_NTP();
+		sec = timeinfo.tm_sec;
 	}
-	loop_VFD();
+	else {
+		sec = millis() / 1000;
+	}
 
-	sec = millis() / 1000;
+	loop_VFD();
 
 	if (sec != last_sec) {
 		last_sec = sec;
 		loop_VFD_1sec();
+
+		// Retry timezone lookup:
+		if (sec == 0 && timezone_definition == "") {
+			setup_timezone();
+		}
 	}
 
 	if (alive_timer.repeat()) {
