@@ -9,6 +9,7 @@
 #include <neotimer.h>
 #include <MQTT.h>
 #include <HTTPClient.h>
+#include <Preferences.h>
 
 #ifdef U8X8_HAVE_HW_SPI
 #include <SPI.h>
@@ -47,6 +48,11 @@ const byte PIN_VFD_DATA = 32;
 const byte PIN_VFD_CHIPSELECT = 5;
 
 //-----------------------------------------------------------------------------
+// Preferences declarations:
+//-----------------------------------------------------------------------------
+Preferences preferences;
+
+//-----------------------------------------------------------------------------
 // WIFI declarations:
 //-----------------------------------------------------------------------------
 bool wifi_connected = false;
@@ -68,9 +74,9 @@ void mqtt_log(String message);
 // VFD-Display declarations:
 //-----------------------------------------------------------------------------
 U8G2_GP1287AI_256X50_1_4W_HW_SPI
-u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
-     /* dc=*/PIN_VFD_CLOCK,
-     /* reset=*/PIN_VFD_RESET /* U8X8_PIN_NONE , PIN_VFD_RESET */);
+u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT, /* dc=*/PIN_VFD_CLOCK, /* reset=*/PIN_VFD_RESET /* U8X8_PIN_NONE , PIN_VFD_RESET */);
+
+void display_OTA_info(unsigned int progress, unsigned int total);
 
 //-----------------------------------------------------------------------------
 // HTTP declarations:
@@ -81,11 +87,15 @@ u8g2(U8G2_R2, /* cs=*/PIN_VFD_CHIPSELECT,
 // (we are using the ESP internal NTP implementation...)
 //-----------------------------------------------------------------------------
 void setup_NTP();
+void setTimezone(String tz);
+
 String timezone = "UTC0";
 
 // Timezone TZ string, eg. "CET-1CEST,M3.5.0,M10.5.0/3" for "Europe/Berlin".
 // Setup via CSV lookup.
 String timezone_definition;
+
+bool timezone_setup_done = false;
 
 struct tm timeinfo; // Updated in loop
 
@@ -138,6 +148,17 @@ String http_get_request(String requestUrl)
 }
 
 //-----------------------------------------------------------------------------
+// Preferences code:
+//-----------------------------------------------------------------------------
+void setup_Preferences()
+{
+	preferences.begin("VFD-Matrix", false);
+	timezone_definition = preferences.getString("tz_definition", timezone_definition);
+	if (timezone_definition != "")
+		setTimezone(timezone_definition);
+}
+
+//-----------------------------------------------------------------------------
 // OTA / WIFI code:
 //-----------------------------------------------------------------------------
 
@@ -166,10 +187,14 @@ void setup_OTA()
 
 			// NOTE: if updating SPIFFS this would be the place to unmount SPIFFS
 			// using SPIFFS.end()
-			Serial.println("Start updating " + type);
+			//Serial.println("Start updating " + type);
 		})
 		.onEnd([]() { Serial.println("\nEnd"); })
-		.onProgress([](unsigned int progress, unsigned int total) { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); })
+		.onProgress([](unsigned int progress, unsigned int total) {
+			display_OTA_info(progress, total);
+			//int percent = progress / (total / 100);
+			//Serial.printf("Progress: %d%%\r", percent);
+		})
 		.onError([](ota_error_t error) {
 			Serial.printf("Error[%u]: ", error);
 			if (error == OTA_AUTH_ERROR)
@@ -232,10 +257,10 @@ void setup_after_WIFI_connect()
 //-----------------------------------------------------------------------------
 
 // from https://randomnerdtutorials.com/esp32-ntp-timezones-daylight-saving/, adapted
-void setTimezone(String timezone)
+void setTimezone(String tz)
 {
-	log("  Setting Timezone to %s\n", timezone.c_str());
-	setenv("TZ", timezone.c_str(), 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
+	log("  Setting Timezone to %s\n", tz.c_str());
+	setenv("TZ", tz.c_str(), 1); //  Now adjust the TZ.  Clock settings are adjusted to show the new local time
 	tzset();
 }
 
@@ -266,7 +291,7 @@ void initTime(String timezone)
 		return;
 	}
 	log("  Got the time from NTP");
-	setTimezone(timezone);
+	//setTimezone(timezone);
 }
 
 // void printLocalTime()
@@ -335,6 +360,10 @@ void setup_timezone()
 				//printLocalTime();
 				setTimezone(timezone_definition);
 				getLocalTime(&timeinfo);
+
+				timezone_setup_done = true;
+				preferences.putString("tz_definition", timezone_definition); // timezone_definition > 15 chars, so use tz_definition as key...
+
 				//printLocalTime();
 			}
 		}
@@ -581,17 +610,44 @@ void draw_current_time(int x, int y)
 	int yv = (int)(dh * 2 + 4 * dhv);
 	int dpy = (int)(yv * 0.2);
 
+	int dpw = 3;
+	int dph = 3;
+
 	draw_2_numbers(x, y, timeinfo.tm_hour, dw, dwv, dh, dhv);
-	u8g2.drawBox(x + xvp, y + yv / 2 - dpy, 2, 2);
-	u8g2.drawBox(x + xvp, y + yv / 2 + dpy, 2, 2);
+
+	if (sec % 2 == 0) {
+		u8g2.drawBox(x + xvp, y + yv / 2 - dpy, dpw, dph);
+		u8g2.drawBox(x + xvp, y + yv / 2 + dpy, dpw, dph);
+	}
 	x += xv;
 
 	draw_2_numbers(x, y, timeinfo.tm_min, dw, dwv, dh, dhv);
-	u8g2.drawBox(x + xvp, y + yv / 2 - dpy, 2, 2);
-	u8g2.drawBox(x + xvp, y + yv / 2 + dpy, 2, 2);
+	if (sec % 2 == 0) {
+		u8g2.drawBox(x + xvp, y + yv / 2 - dpy, dpw, dph);
+		u8g2.drawBox(x + xvp, y + yv / 2 + dpy, dpw, dph);
+	}
 	x += xv;
 
 	draw_2_numbers(x, y, timeinfo.tm_sec, dw, dwv, dh, dhv);
+}
+
+void display_OTA_info(unsigned int progress, unsigned int total)
+{
+	//return;
+	float percent = progress / (total / 100.0f);
+
+	u8g2.setFont(u8g2_font_6x10_tf);
+	u8g2.firstPage();
+	do {
+		u8g2.setCursor(95, 15);
+		u8g2.printf("OTA Update...");
+
+		u8g2.drawFrame(0, 25, u8g2.getWidth(), 8);
+		u8g2.drawBox(0, 25, (u8g2_uint_t)(u8g2.getWidth() * percent / 100), 8);
+
+		u8g2.setCursor(60, 45);
+		u8g2.printf("%06u / %u = %2.1f%% ", progress, total, percent);
+	} while (u8g2.nextPage());
 }
 
 void loop_VFD_1sec()
@@ -604,18 +660,6 @@ void loop_VFD_1sec()
 
 		draw_current_time(0, 0);
 
-		// draw_digit(1, 1, sec % 11, 3, 0, 5, 0);
-		// draw_digit(10, 1, sec % 11, 3, 1, 5, 1);
-		// draw_digit(20, 1, sec % 11, 10, 2, 12, 2);
-		// draw_digit(40, 1, sec % 11, 14, 1, 12, 1);
-
-		// if (sec % 2 == 0) {
-		// 	u8g2.drawPixel(1, 1);
-		// 	u8g2.drawPixel(10, 1);
-		// 	u8g2.drawPixel(20, 1);
-		// 	u8g2.drawPixel(40, 1);
-		// }
-
 		//		u8g2.setFont(u8g2_font_10x20_me);
 		u8g2.setFont(u8g2_font_6x10_tf);
 
@@ -625,6 +669,8 @@ void loop_VFD_1sec()
 		u8g2.setFont(u8g2_font_5x8_tf);
 		u8g2.setCursor(154, 10);
 		u8g2.printf("%s        ", timezone.c_str());
+		u8g2.setCursor(154, 25);
+		u8g2.printf("%s        ", timezone_definition.c_str());
 
 	} while (u8g2.nextPage());
 
@@ -643,6 +689,7 @@ void setup()
 	Serial.printf("Running....\n");
 	Serial.printf("---------------------------------------------------------\n");
 
+	setup_Preferences();
 	setup_WIFI();
 	setup_VFD();
 }
@@ -673,7 +720,7 @@ void loop()
 		loop_VFD_1sec();
 
 		// Retry timezone lookup:
-		if (sec == 0 && timezone_definition == "") {
+		if (sec == 0 && !timezone_setup_done) {
 			setup_timezone();
 		}
 	}
