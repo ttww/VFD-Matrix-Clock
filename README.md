@@ -4,9 +4,7 @@ Code for a wemos_d1_mini32 (ESP32) driving a GP1287BI (UNL-200AP) VFD
 
 #### TODO:
 
-- Working: 7-segment digit
-- Design "clock" display
-- Setup for MQTT
+- Work: Design "clock" display
 - Setup weather infos
 - Add "speaker"
 - Add buttons
@@ -14,6 +12,9 @@ Code for a wemos_d1_mini32 (ESP32) driving a GP1287BI (UNL-200AP) VFD
 
 #### DONE:
 
+- Setup internal CI/CD
+- Setup for MQTT
+- 7-segment digit
 - Setup for OTA
 - Display control
 - Brightness control
