@@ -6,3 +6,6 @@
 
 // IP or hostname for mqtt server
 #define MQTT_HOST "xxx"
+
+// Used for the CI/CD info, will be replaced with real BUILD_TAG
+#define BUILD_TAG "develop build"
