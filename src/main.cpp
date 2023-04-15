@@ -20,9 +20,37 @@
 
 #include "arduino_secrets.h"
 
+//-----------------------------------------------------------------------------
+// Language texts:
+//-----------------------------------------------------------------------------
+
+#define LANG_EN 0
+#define LANG_DE 1
+
+#define LANGUAGE LANG_DE
+
+#if LANGUAGE == LANG_EN
+const char *week_days_long[] = { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" };
+const char *week_days_short[] = { "Mon.", "Tue.", "Wed.", "Thu.", "Fri.", "Sat.", "Sun." };
+const char *month_names_long[] = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
+const char *month_names_short[] = { "Jan.", "Feb.", "Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.", "Sept.", "Oct.", "Nov.", "Dec." };
+#endif
+
+#if LANGUAGE == LANG_DE
+const char *week_days_long[] = { "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag" };
+const char *week_days_short[] = { "Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So." };
+const char *month_names_long[] = { "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember" };
+const char *month_names_short[] = { "Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez." };
+#endif
+
+//-----------------------------------------------------------------------------
+// Global declarations and pin mappings:
+//-----------------------------------------------------------------------------
+
 const char *ssid = SECRET_SSID;
 const char *password = SECRET_PASSWD;
 const char *mqtt_host = MQTT_HOST;
+const char *build_tag = BUILD_TAG;
 
 const char *hostname = "matrix-vfd";
 
@@ -615,20 +643,47 @@ void draw_current_time(int x, int y)
 
 	draw_2_numbers(x, y, timeinfo.tm_hour, dw, dwv, dh, dhv);
 
-	if (sec % 2 == 0) {
+	bool dp_on = sec % 2 == 0;
+	//int ms = millis() % 1000;
+	//bool dp_on = (ms >= 0 && ms <= 250) || (ms >= 500 && ms <= 750);
+
+	if (dp_on) {
 		u8g2.drawBox(x + xvp, y + yv / 2 - dpy, dpw, dph);
 		u8g2.drawBox(x + xvp, y + yv / 2 + dpy, dpw, dph);
 	}
 	x += xv;
 
 	draw_2_numbers(x, y, timeinfo.tm_min, dw, dwv, dh, dhv);
-	if (sec % 2 == 0) {
+
+	if (dp_on) {
 		u8g2.drawBox(x + xvp, y + yv / 2 - dpy, dpw, dph);
 		u8g2.drawBox(x + xvp, y + yv / 2 + dpy, dpw, dph);
 	}
 	x += xv;
 
 	draw_2_numbers(x, y, timeinfo.tm_sec, dw, dwv, dh, dhv);
+}
+
+void draw_current_date(int x, int y)
+{
+		u8g2.setFont(u8g2_font_5x8_tf);
+		u8g2.setCursor(x, y + 8);
+		u8g2.printf("%s   ", week_days_long[timeinfo.tm_wday-1]);
+
+		if (timeinfo.tm_mday < 10) {
+			draw_digit(x + 31, y + 5, timeinfo.tm_mday, 6, 2, 8, 2);
+		}
+		else {
+			draw_2_numbers(x + 31, y + 5, timeinfo.tm_mday, 6, 2, 8, 2);
+		}
+
+		u8g2.drawBox(x + 60, y + 28, 2, 2);
+
+
+		u8g2.setFont(u8g2_font_6x10_tf);
+		//u8g2.setFont(u8g2_font_10x20_tf);
+		u8g2.setCursor(x, y + 39);
+		u8g2.printf("%s, %d ", month_names_long[timeinfo.tm_mon], timeinfo.tm_year + 1900);
 }
 
 void display_OTA_info(unsigned int progress, unsigned int total)
@@ -659,19 +714,13 @@ void loop_VFD_1sec()
 		loops++;
 
 		draw_current_time(0, 0);
+		draw_current_date(150, 0);
 
 		//		u8g2.setFont(u8g2_font_10x20_me);
-		u8g2.setFont(u8g2_font_6x10_tf);
+		u8g2.setFont(u8g2_font_5x7_tf);
 
-		u8g2.setCursor(0, 48);
-		u8g2.printf("Free Memory = %ld  ", ESP.getFreeHeap());
-
-		u8g2.setFont(u8g2_font_5x8_tf);
-		u8g2.setCursor(154, 10);
-		u8g2.printf("%s        ", timezone.c_str());
-		u8g2.setCursor(154, 25);
-		u8g2.printf("%s        ", timezone_definition.c_str());
-
+		u8g2.setCursor(0, 49);
+		u8g2.printf("Free Memory = %ld  %s", ESP.getFreeHeap(), build_tag);
 	} while (u8g2.nextPage());
 
 	//log("Loops %d, Time= %s", loops, ntp.formattedTime("%A %C %F %H"));

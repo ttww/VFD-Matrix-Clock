@@ -2,6 +2,13 @@
 
 Code for a wemos_d1_mini32 (ESP32) driving a GP1287BI (UNL-200AP) VFD
 
+#### Features:
+
+- Automatic timezone selection (via IP & location detection)
+- Autimatic brightness control via LDR
+- OTA enabled
+- ...
+
 #### TODO:
 
 - Work: Design "clock" display
