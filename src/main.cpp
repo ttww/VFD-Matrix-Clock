@@ -30,15 +30,15 @@
 #define LANGUAGE LANG_DE
 
 #if LANGUAGE == LANG_EN
-const char *week_days_long[] = { "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday" };
-const char *week_days_short[] = { "Mon.", "Tue.", "Wed.", "Thu.", "Fri.", "Sat.", "Sun." };
+const char *week_days_long[] = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+const char *week_days_short[] = { "Sun.", "Mon.", "Tue.", "Wed.", "Thu.", "Fri.", "Sat." };
 const char *month_names_long[] = { "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December" };
 const char *month_names_short[] = { "Jan.", "Feb.", "Mar.", "Apr.", "May", "Jun.", "Jul.", "Aug.", "Sept.", "Oct.", "Nov.", "Dec." };
 #endif
 
 #if LANGUAGE == LANG_DE
-const char *week_days_long[] = { "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag" };
-const char *week_days_short[] = { "Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So." };
+const char *week_days_long[] = { "Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag" };
+const char *week_days_short[] = { "So.", "Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa." };
 const char *month_names_long[] = { "Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember" };
 const char *month_names_short[] = { "Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez." };
 #endif
@@ -602,9 +602,9 @@ void adjust_vfd_brightness()
 {
 	if (ldr_timer.repeat()) {
 		ldr = analogRead(PIN_VFD_LDR);
-		int raw_brightness = map(ldr, 0, 1500, 40, 1);
-		if (raw_brightness < 1)
-			raw_brightness = 1;
+		int raw_brightness = map(ldr, 0, 1500, 40, 0);
+		if (raw_brightness < 0)
+			raw_brightness = 0;
 
 		if (brightness > raw_brightness)
 			brightness--;
@@ -666,24 +666,23 @@ void draw_current_time(int x, int y)
 
 void draw_current_date(int x, int y)
 {
-		u8g2.setFont(u8g2_font_5x8_tf);
-		u8g2.setCursor(x, y + 8);
-		u8g2.printf("%s   ", week_days_long[timeinfo.tm_wday-1]);
+	u8g2.setFont(u8g2_font_5x8_tf);
+	u8g2.setCursor(x, y + 8);
+	u8g2.printf("%s   ", week_days_long[timeinfo.tm_wday]);
 
-		if (timeinfo.tm_mday < 10) {
-			draw_digit(x + 31, y + 5, timeinfo.tm_mday, 6, 2, 8, 2);
-		}
-		else {
-			draw_2_numbers(x + 31, y + 5, timeinfo.tm_mday, 6, 2, 8, 2);
-		}
+	if (timeinfo.tm_mday < 10) {
+		draw_digit(x + 31, y + 2, timeinfo.tm_mday, 7, 2, 8, 2);
+	}
+	else {
+		draw_2_numbers(x + 31, y + 2, timeinfo.tm_mday, 7, 2, 8, 2);
+	}
 
-		u8g2.drawBox(x + 60, y + 28, 2, 2);
+	u8g2.drawBox(x + 61, y + 23, 3, 3);
 
-
-		u8g2.setFont(u8g2_font_6x10_tf);
-		//u8g2.setFont(u8g2_font_10x20_tf);
-		u8g2.setCursor(x, y + 39);
-		u8g2.printf("%s, %d ", month_names_long[timeinfo.tm_mon], timeinfo.tm_year + 1900);
+	u8g2.setFont(u8g2_font_6x10_tf);
+	//u8g2.setFont(u8g2_font_10x20_tf);
+	u8g2.setCursor(x, y + 39);
+	u8g2.printf("%s, %d ", month_names_long[timeinfo.tm_mon], timeinfo.tm_year + 1900);
 }
 
 void display_OTA_info(unsigned int progress, unsigned int total)
@@ -720,7 +719,7 @@ void loop_VFD_1sec()
 		u8g2.setFont(u8g2_font_5x7_tf);
 
 		u8g2.setCursor(0, 49);
-		u8g2.printf("Free Memory = %ld  %s", ESP.getFreeHeap(), build_tag);
+		u8g2.printf("Free Memory = %ld  %d  ", ESP.getFreeHeap(), brightness);
 	} while (u8g2.nextPage());
 
 	//log("Loops %d, Time= %s", loops, ntp.formattedTime("%A %C %F %H"));
